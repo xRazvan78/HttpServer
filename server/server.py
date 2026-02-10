@@ -16,11 +16,24 @@ def run_server():
         print("Client connected from:", client_address)
 
         request = client_socket.recv(1024)
+        request_text = request.decode()
+        lines = request_text.split("\r\n")
+        request_line = lines[0]
+        method, path, version = request_line.split(" ")
+        print("Method: ", method," Path: ", path)
+
+
         print("Received request:")
         print(request.decode())
         print()
 
-        body = "Hello from my own HTTP server"
+        if path == "/":
+            body = "Home page"
+        elif path == "/statusOk":
+            body = "OK"
+        else:
+            body = "Not Found"
+
         response = (
             "HTTP/1.1 200 OK\r\n"
             "Content-Type: text/plain\r\n"
