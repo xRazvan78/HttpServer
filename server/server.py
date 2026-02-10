@@ -3,6 +3,14 @@ import socket
 HOST = "127.0.0.1"
 PORT = 8080
 
+def build_http_response(status, body):
+    return (
+        f"HTTP/1.1 {status}\r\n"
+        "Content-Type: text/plain\r\n"
+        f"Content-Length: {len(body)}\r\n"
+        "\r\n"
+        f"{body}"
+    )
 
 def run_server():
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -28,19 +36,16 @@ def run_server():
         print()
 
         if path == "/":
+            status = "200 OK"
             body = "Home page"
         elif path == "/statusOk":
+            status = "200 OK"
             body = "OK"
         else:
+            status = "404 Not Found"
             body = "Not Found"
 
-        response = (
-            "HTTP/1.1 200 OK\r\n"
-            "Content-Type: text/plain\r\n"
-            f"Content-Length: {len(body)}\r\n"
-            "\r\n"
-            f"{body}"
-        )
+        response = build_http_response(status, body)
 
         client_socket.sendall(response.encode())
         client_socket.close()
