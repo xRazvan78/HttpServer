@@ -1,5 +1,6 @@
 import os
 import socket
+import json
 
 HOST = "127.0.0.1"
 PORT = 8080
@@ -70,6 +71,10 @@ def time_handler(method, path, query):
     import datetime
     now = datetime.datetime.now().isoformat()
     return "200 OK", f"<h1>Current time: {now}</h1>", "text/html"
+
+@route("/api/echo", methods=["POST"])
+def echo_handler(method, path, params):
+    return  "200 OK", json.dumps(params) , "application/json"
 
 
 def parse_query(query_string):
@@ -144,8 +149,23 @@ def run_server():
                 body += client_socket.recv(1024)
             body= body[:content_length]
 
-            body_text = body.decode(errors="ignore")
-            post_params = parse_query(body_text)
+            body_text = body.decode("utf-8", errors="strict")
+
+            content_type = headers.get("content-type", "")
+
+            if content_type.startswith("application/json"):
+                try:
+                    post_params = json.loads(body_text)
+                except json.JSONDecodeError:
+                    body = "<h1>400 Bad Request</h1>"
+                    response = build_http_response(
+                        "400 Bad Request", body, "text/html"
+                    )
+                    client_socket.sendall(response)
+                    client_socket.close()
+                    continue
+            else:
+                post_params = parse_query(body_text)
 
             try:
                 method, full_path, version = request_line.split(" ")
