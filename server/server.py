@@ -4,21 +4,30 @@ import socket
 HOST = "127.0.0.1"
 PORT = 8080
 STATIC_DIR = os.path.abspath("static")
+MAX_BODY_SIZE = 1024 * 1024
 
-
-def build_http_response(status, body, content_type):
+def build_http_response(status, body, content_type, extra_headers=None):
     if isinstance(body, str):
         body = body.encode("utf-8")
 
-    headers = (
-        f"HTTP/1.1 {status}\r\n"
-        f"Content-Type: {content_type}\r\n"
-        f"Content-Length: {len(body)}\r\n"
-        "\r\n"
-    ).encode("utf-8")
+    headers = {
+        "Content-Type": content_type,
+        "Content-Length": str(len(body)),
+        "Connection": "close",
+        "Server": "HttpServer"
+    }
 
-    return headers + body
+    if extra_headers:
+        headers.update(extra_headers)
 
+    header_text = f"HTTP/1.1 {status}\r\n"
+
+    for key, value in headers.items():
+        header_text += f"{key}: {value}\r\n"
+
+    header_text += "\r\n"
+
+    return header_text.encode("utf-8") + body
 
 def get_content_type(filename):
     if filename.endswith(".html"):
@@ -39,8 +48,7 @@ def get_content_type(filename):
 
 ROUTES = {}
 
-
-def route(path, methods=["GET"]):
+def route(path, methods=["GET","POST"]):
     def decorator(func):
         ROUTES[path] = {
             "methods": methods,
@@ -49,7 +57,6 @@ def route(path, methods=["GET"]):
         return func
 
     return decorator
-
 
 @route("/hello")
 def hello_handler(method, path, query):
@@ -94,15 +101,51 @@ def run_server():
 
             print("Client connected from:", client_address)
 
-            request = client_socket.recv(1024)
+            buffer = b""
 
-            if not request:
+            while b"\r\n\r\n" not in buffer:
+                chunk = client_socket.recv(1024)
+                if not chunk:
+                    break
+                buffer += chunk
+
+            if not buffer:
                 client_socket.close()
                 continue
 
-            request_text = request.decode(errors="ignore")
-            lines = request_text.split("\r\n")
-            request_line = lines[0]
+            header_bytes, _, remaining_bytes = buffer.partition(b"\r\n\r\n")
+
+            header_text = header_bytes.decode(errors="ignore")
+            header_lines = header_text.split("\r\n")
+            request_line = header_lines[0]
+
+            headers = {}
+            for line in header_lines[1:]:
+                if ": " in line:
+                    key, value = line.split(": ", 1)
+                    headers[key.strip().lower()] = value.strip()
+
+            content_length = int(headers.get("content-length", 0))
+
+            if content_length > MAX_BODY_SIZE:
+                body = "<h1>413 Payload Too Large</h1>"
+                response = build_http_response(
+                    "413 Payload Too Large", body, "text/html"
+                )
+                client_socket.sendall(response)
+                client_socket.close()
+                continue
+
+            print("Content-Length:", content_length)
+
+            body = remaining_bytes
+
+            while len(body)< content_length:
+                body += client_socket.recv(1024)
+            body= body[:content_length]
+
+            body_text = body.decode(errors="ignore")
+            post_params = parse_query(body_text)
 
             try:
                 method, full_path, version = request_line.split(" ")
@@ -116,16 +159,21 @@ def run_server():
                 query_params = parse_query(query_string)
 
             except ValueError:
+                body = "<h1>400 Bad Request</h1>"
+                response = build_http_response(
+                    "400 Bad Request", body, "text/html"
+                )
+                client_socket.sendall(response)
                 client_socket.close()
                 continue
 
-            body = ""
-
             print("Method: ", method, " Path: ", path)
+
+            params = query_params if method == "GET" else post_params
 
             if path in ROUTES and method in ROUTES[path]["methods"]:
                 handler = ROUTES[path]["handler"]
-                status, body, content_type = handler(method, path, query_params)
+                status, body, content_type = handler(method, path, params)
 
                 print("Sending dynamic response:", status)
                 response = build_http_response(status, body, content_type)
@@ -134,9 +182,18 @@ def run_server():
                 client_socket.close()
                 continue
 
-            print("Received request:")
-            print(request.decode())
-            print()
+            if path in ROUTES and method not in ROUTES[path]["methods"]:
+                allowed = ", ".join(ROUTES[path]["methods"])
+                body = "<h1>405 Method Not Allowed</h1>"
+                headers = {"Allow": allowed}
+
+                response = build_http_response(
+                    "405 Method Not Allowed", body, "text/html", extra_headers=headers
+                )
+
+                client_socket.sendall(response)
+                client_socket.close()
+                continue
 
             if path == "/":
                 requested_path = "index.html"
